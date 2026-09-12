@@ -1,0 +1,13 @@
+# Build-context trimming.
+#
+# src/yuzu/mainline/.git is ~965MB of history the build never reads: the
+# Dockerfile uses `git apply` (which works outside a repo) and yuzu's
+# GenerateSCMRev.cmake degrades to an "unknown" revision without it.
+#
+# NOTE: do NOT use a blanket `**/.git` here. yuzu's CMakeLists.txt:195
+# (check_submodules_present) tests for `externals/<mod>/.git` -- the small
+# gitlink FILES -- and excluding those fails the configure step with a
+# misleading "Git submodule externals/enet not found".
+src/yuzu/mainline/.git
+.git
+.codegraph/

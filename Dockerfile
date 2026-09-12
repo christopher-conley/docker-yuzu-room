@@ -1,10 +1,14 @@
-FROM alpine:3.20 AS builder
+FROM alpine:latest AS builder
 
 COPY ./patches /tmp/patches
+COPY ./src/yuzu/ /tmp/yuzu/
+# Authoritative dependency versions live in the repo, not the vendored tree.
+COPY ./ci/deps.sh /tmp/yuzu/room/.ci/deps.sh
 
 WORKDIR /tmp/yuzu
 
 RUN apk update \
+    && apk upgrade --no-cache \
     && apk -U add --no-cache \
         autoconf \
         bash \
@@ -25,32 +29,29 @@ RUN apk update \
         yasm \
     && export PATH=$PATH:/bin:/usr/local/bin:/usr/bin:/sbin:/usr/lib/ninja-build/bin \
     && mkdir -p /server/lib /tmp/yuzu/build /tmp/yuzu/room /tmp/yuzu/mainline \
-    && wget --show-progress -q -c -O "multiplayer-dedicated.tar.xz" "https://github.com/K4rian/docker-yuzu-room/releases/download/v0.1734/multiplayer-dedicated.tar.gz" \
-    && wget --show-progress -q -c -O "mainline.tar.xz" "https://github.com/K4rian/docker-yuzu-room/releases/download/v0.1734/mainline-1734.tar.gz" \
-    && tar --strip-components=1 -xf multiplayer-dedicated.tar.xz -C /tmp/yuzu/room \
-    && tar --strip-components=1 -xf mainline.tar.xz -C /tmp/yuzu/mainline \
     && cp /tmp/patches/*.patch /tmp/yuzu/room/patches 2>/dev/null \
     && cd /tmp/yuzu/mainline \
     && git apply /tmp/yuzu/room/patches/*.patch \
-    && bash /tmp/yuzu/room/.ci/deps.sh \
+    && bash -e /tmp/yuzu/room/.ci/deps.sh \
     && { echo "#!/bin/ash"; \
          echo "SCRIPT_DIR=\$(dirname \"\$(readlink -f \"\$0\")\")"; \
          echo "cd \$SCRIPT_DIR"; \
          echo "LDFLAGS=\"-flto -fuse-linker-plugin -fuse-ld=gold\""; \
          echo "CFLAGS=\"-ftree-vectorize -flto\""; \
-         echo "if [[ \"$(uname -m)\" == \"aarch64\" ]]; then"; \
+         echo "if [[ \"\$(uname -m)\" == \"aarch64\" ]]; then"; \
          echo "  CFLAGS=\"-O2\""; \
          echo "  LDFLAGS=\"\""; \
-         echo "elif [[ \"$(uname -m)\" == \"x86_64\" ]]; then"; \
-         echo "  CFLAGS=\"$CFLAGS -march=core2 -mtune=intel\""; \
+         echo "elif [[ \"\$(uname -m)\" == \"x86_64\" ]]; then"; \
+         echo "  CFLAGS=\"\$CFLAGS -march=znver5 -mtune=znver5\""; \
          echo "fi"; \
          echo "export CFLAGS"; \
-         echo "export CXXFLAGS=\"$CFLAGS\""; \
+         echo "export CXXFLAGS=\"\$CFLAGS\""; \
          echo "export LDFLAGS"; \
          echo "cmake ../mainline -GNinja -DCMAKE_BUILD_TYPE=Release \\"; \
          echo " -DENABLE_SDL2=OFF -DENABLE_QT=OFF -DENABLE_COMPATIBILITY_LIST_DOWNLOAD=OFF \\"; \
          echo " -DUSE_DISCORD_PRESENCE=OFF -DYUZU_USE_BUNDLED_FFMPEG=ON -DYUZU_TESTS=OFF \\"; \
-         echo " -DENABLE_LIBUSB=OFF"; \
+         echo " -DENABLE_LIBUSB=OFF \\"; \
+         echo " -DCMAKE_POLICY_VERSION_MINIMUM=3.5"; \
          echo "ninja yuzu-room"; \
        } >/tmp/yuzu/build/build.sh \
     && chmod +x /tmp/yuzu/build/build.sh \
@@ -64,11 +65,10 @@ RUN apk update \
     && touch /server/yuzu-room.log \
     && rm -R /tmp/yuzu /tmp/patches
 
-FROM alpine:3.20
+FROM alpine:latest
 
 ENV USERNAME=yuzu
 ENV USERHOME=/home/$USERNAME
-
 # Required
 ENV YUZU_BINDADDR="0.0.0.0"
 ENV YUZU_PORT=24872
@@ -82,10 +82,15 @@ ENV YUZU_ROOMDESC=""
 ENV YUZU_PREFGAMEID="0"
 ENV YUZU_PASSWORD=""
 ENV YUZU_ISPUBLIC=0
+# Supplied at runtime (compose env_file / -e). Never bake a credential into
+# an image layer: it stays readable via `docker history` and survives being
+# overridden at runtime.
 ENV YUZU_TOKEN=""
 ENV YUZU_WEBAPIURL=""
 
 RUN apk update \
+    && apk upgrade --no-cache \
+    && apk add --no-cache wget vim curl tmux \
     && adduser --disabled-password $USERNAME \
     && rm -rf /tmp/* /var/tmp/*
 
@@ -98,3 +103,4 @@ WORKDIR $USERHOME
 RUN chmod +x docker-entrypoint.sh
 
 ENTRYPOINT ["./docker-entrypoint.sh"]
+
